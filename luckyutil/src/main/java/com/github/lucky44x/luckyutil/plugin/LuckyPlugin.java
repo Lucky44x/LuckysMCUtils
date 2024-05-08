@@ -3,8 +3,6 @@ package com.github.lucky44x.luckyutil.plugin;
 
 import com.github.lucky44x.luckyutil.config.ConfigFile;
 import com.github.lucky44x.luckyutil.config.LangConfig;
-import com.github.lucky44x.luckyutil.reflect.ReflectionUtilities;
-import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.util.*;
 import lombok.Getter;
@@ -16,8 +14,9 @@ import org.bukkit.event.Listener;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public abstract class LuckyPlugin extends JavaPlugin {
-    private final Listener[] listeners = getListeners();
-    private final List<CommandData> commands = getCommands();
+    private final Listener[] listeners;
+    private final List<CommandData> commands =
+            new ArrayList<com.github.lucky44x.luckyutil.plugin.LuckyPlugin.CommandData>();
 
     @Getter
     private final ConfigFile CONFIG;
@@ -25,7 +24,7 @@ public abstract class LuckyPlugin extends JavaPlugin {
     @Getter
     private final LangConfig LANG;
 
-    public LuckyPlugin(Class<?> config, String langName) {
+    public LuckyPlugin(Class<?> config, String langName, Class<?>... toRegister) {
         try {
             this.CONFIG = (ConfigFile) config.getConstructor(this.getClass()).newInstance(this);
 
@@ -36,6 +35,40 @@ public abstract class LuckyPlugin extends JavaPlugin {
             throw new RuntimeException(e);
         }
         this.LANG = new LangConfig(this, langName);
+
+        ArrayList<Listener> listenersTMP = new ArrayList<>();
+        for (Class<?> clazz : toRegister) {
+            if (Arrays.stream(clazz.getInterfaces()).toList().contains(Listener.class)) {
+                if (clazz.isAnnotationPresent(IgnoreAutoLoad.class)) continue;
+                try {
+                    listenersTMP.add(
+                            (Listener) clazz.getConstructor(this.getClass()).newInstance(this));
+                } catch (InstantiationException
+                        | IllegalAccessException
+                        | InvocationTargetException
+                        | NoSuchMethodException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+
+            if (Arrays.stream(clazz.getInterfaces()).toList().contains(CommandExecutor.class)) {
+                if (clazz.isAnnotationPresent(IgnoreAutoLoad.class)
+                        || !clazz.isAnnotationPresent(CommandAutoLoad.class)) continue;
+                CommandAutoLoad autoLoad = clazz.getAnnotation(CommandAutoLoad.class);
+                try {
+                    commands.add(new CommandData(
+                            autoLoad.value(),
+                            clazz.getConstructor(this.getClass()).newInstance(this),
+                            Arrays.stream(clazz.getInterfaces()).toList().contains(TabCompleter.class)));
+                } catch (InstantiationException
+                        | IllegalAccessException
+                        | InvocationTargetException
+                        | NoSuchMethodException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+        }
+        this.listeners = listenersTMP.toArray(Listener[]::new);
     }
 
     @Override
@@ -96,60 +129,6 @@ public abstract class LuckyPlugin extends JavaPlugin {
 
     protected String getElapsedTime(long startTime) {
         return (System.nanoTime() - startTime) / 1000000 + "ms";
-    }
-
-    private Listener[] getListeners() {
-        ArrayList<Listener> listeners = new ArrayList<>();
-
-        try {
-            for (Class<?> clazz :
-                    ReflectionUtilities.getClassesByPackageName(this.getClass().getPackageName() + ".events")) {
-                if (!Arrays.stream(clazz.getInterfaces()).toList().contains(Listener.class)) continue;
-
-                if (clazz.isAnnotationPresent(IgnoreAutoLoad.class)) continue;
-
-                listeners.add((Listener) clazz.getConstructor(this.getClass()).newInstance(this));
-            }
-        } catch (ClassNotFoundException
-                | IOException
-                | InvocationTargetException
-                | InstantiationException
-                | IllegalAccessException
-                | NoSuchMethodException e) {
-            e.printStackTrace();
-        }
-
-        return listeners.toArray(Listener[]::new);
-    }
-
-    private List<CommandData> getCommands() {
-        List<CommandData> commands = new ArrayList<>();
-
-        try {
-            for (Class<?> clazz :
-                    ReflectionUtilities.getClassesByPackageName(this.getClass().getPackageName() + ".commands")) {
-                if (!Arrays.stream(clazz.getInterfaces()).toList().contains(CommandExecutor.class)) continue;
-
-                if (clazz.isAnnotationPresent(IgnoreAutoLoad.class)
-                        || !clazz.isAnnotationPresent(CommandAutoLoad.class)) continue;
-
-                CommandAutoLoad autoLoad = clazz.getAnnotation(CommandAutoLoad.class);
-
-                commands.add(new CommandData(
-                        autoLoad.value(),
-                        clazz.getConstructor(this.getClass()).newInstance(this),
-                        Arrays.stream(clazz.getInterfaces()).toList().contains(TabCompleter.class)));
-            }
-        } catch (ClassNotFoundException
-                | IOException
-                | InvocationTargetException
-                | InstantiationException
-                | IllegalAccessException
-                | NoSuchMethodException e) {
-            e.printStackTrace();
-        }
-
-        return commands;
     }
 
     private record CommandData(String name, Object executorObject, boolean isCompleter) {}
